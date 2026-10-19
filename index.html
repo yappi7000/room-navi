@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#081322" />
+  <title>やっぴ〜 ROOM Navi | 商品検索と投稿準備</title>
+  <meta name="description" content="楽天市場の商品を探して比較し、ROOM・X・Threads向けの紹介文を準備する個人用ツール" />
+  <link rel="stylesheet" href="./styles.css" />
+  <script src="./config.js" defer></script>
+  <script src="./app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="./" aria-label="やっぴ〜 ROOM Navi ホーム">
+      <span class="logo">Y</span><span>やっぴ〜 <b>ROOM Navi</b><small>Rakuten 商品セレクター</small></span>
+    </a>
+    <nav class="toplinks" aria-label="外部リンク">
+      <a href="https://room.rakuten.co.jp/aloha_labo_kyani/items" target="_blank" rel="noopener noreferrer">my ROOM ↗</a>
+      <a href="https://webservice.rakuten.co.jp/" target="_blank" rel="noopener noreferrer">楽天API ↗</a>
+    </nav>
+  </header>
+  <main class="wrap">
+    <section class="hero">
+      <div><p class="eyebrow">SMART CHOICE · SMART POST</p>
+      <h1>見つける。選ぶ。<span>伝える。</span></h1>
+      <p>スマホ周辺機器を中心に、カー用品も。楽天市場から商品を探して、紹介文の下書きをすばやく作成。</p>
+      <div class="statline"><span>📱 スマホ周辺機器 80%</span><span>🚗 カー用品 20%</span><span>🔒 APIキーはサーバー側</span></div></div>
+      <div class="hero-mark" aria-hidden="true">📦<small>ROOM<br/>NAVI</small></div>
+    </section>
+    <section class="workspace">
+      <div class="tabs" role="tablist" aria-label="画面切り替え">
+        <button role="tab" aria-selected="true" id="tab-search" data-tab="search">🔎 商品を探す</button>
+        <button role="tab" aria-selected="false" id="tab-saved" data-tab="saved">⭐ 保存リスト <span id="savedCount">0</span></button>
+      </div>
+      <section id="panel-search" role="tabpanel" aria-labelledby="tab-search">
+        <form id="searchForm" class="search-form">
+          <div class="search-head"><label for="keyword">キーワード</label><span class="help">楽天市場から検索します</span></div>
+          <div class="search-row"><input id="keyword" name="keyword" type="search" autocomplete="off" placeholder="例：Anker USB-C 充電器" maxlength="80" required />
+          <button type="submit" class="primary" id="searchButton">商品を検索 →</button></div>
+          <div class="quick" aria-label="おすすめキーワード">
+            <button type="button" data-keyword="USB-C 充電器">USB-C充電器</button>
+            <button type="button" data-keyword="モバイルバッテリー">モバイルバッテリー</button>
+            <button type="button" data-keyword="iPhone ケース">iPhoneケース</button>
+            <button type="button" data-keyword="車載 スマホホルダー">車載ホルダー</button>
+            <button type="button" data-keyword="車載 USB-C 充電器">車載充電器</button>
+          </div>
+          <div class="filters"><label>並び順<select id="sort"><option value="standard">楽天おすすめ順</option><option value="+itemPrice">価格が安い順</option><option value="-itemPrice">価格が高い順</option><option value="-reviewCount">レビュー数順</option><option value="-reviewAverage">評価が高い順</option></select></label>
+          <label class="check"><input type="checkbox" id="freeShipping" /> 送料無料に絞る</label>
+          <label class="check"><input type="checkbox" id="hasReview" /> レビューあり</label></div>
+        </form>
+        <div class="result-head"><h2>検索結果</h2><span id="resultMeta">キーワードを入力して検索してください。</span></div>
+        <div id="status" class="status" role="status">準備OK。商品を検索すると、楽天市場の最新の検索結果を表示します。</div>
+        <div id="results" class="cards" aria-live="polite"></div>
+        <div class="pagination"><button id="prevPage" type="button" disabled>← 前へ</button><span id="pageLabel">–</span><button id="nextPage" type="button" disabled>次へ →</button></div>
+      </section>
+      <section id="panel-saved" class="hidden" role="tabpanel" aria-labelledby="tab-saved">
+        <div class="result-head"><h2>保存した商品</h2><span>このブラウザだけに保存されます</span></div>
+        <div class="saved-actions"><button id="exportSaved" type="button">保存データを書き出す</button><label class="file-label">保存データを読み込む<input id="importSaved" type="file" accept="application/json,.json" hidden /></label></div>
+        <div id="savedEmpty" class="status">商品を保存すると、ここに表示されます。</div><div id="savedResults" class="cards"></div>
+      </section>
+    </section>
+    <footer>
+      <div>商品データ提供：<a href="https://webservice.rakuten.co.jp/" target="_blank" rel="noopener noreferrer">Rakuten Web Service</a></div>
+      <p>表示価格・在庫・ポイント等は変動します。購入前に楽天市場の商品ページで確認してください。紹介文は下書きです。実際に使用していない商品の使用体験を記載しないでください。</p>
+    </footer>
+  </main>
+  <dialog id="draftDialog" aria-labelledby="draftTitle"><div class="dialog-head"><div><p class="eyebrow">POST ASSISTANT</p><h2 id="draftTitle">紹介文を作成</h2></div><button id="closeDraft" class="close" aria-label="閉じる">×</button></div>
+    <p id="draftProduct" class="draft-product"></p><div class="draft-tabs" role="group" aria-label="媒体を選択"><button data-platform="room" class="active">楽天ROOM</button><button data-platform="x">X</button><button data-platform="threads">Threads</button></div>
+    <label for="draftText">投稿文（編集可能）</label><textarea id="draftText" rows="9" spellcheck="false"></textarea>
+    <div class="dialog-foot"><small>下書きは仕様・価格情報のみを使用。ROOMへの自動投稿は行いません。</small><div><button id="copyDraft" class="primary">文章をコピー</button><button id="openProduct">楽天の商品を見る ↗</button></div></div>
+  </dialog>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+</body>
+</html>
