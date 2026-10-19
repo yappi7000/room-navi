@@ -8,6 +8,9 @@
   let saved = readSaved();
   let page = 1, totalPages = 0, lastKeyword = '', products = [], selected = null, platform = 'room';
   let toastTimer;
+  // v4: AI資格情報はセッション内の変数のみ。localStorage等へ保存しない。
+  let aiResult = null, aiActive = false, aiBusy = false;
+
   function readSaved() { try { const data = JSON.parse(localStorage.getItem(KEY)); return Array.isArray(data) ? data.filter(x => x && typeof x.itemCode === 'string').slice(0,300) : []; } catch { return []; } }
   function persist() { try { localStorage.setItem(KEY, JSON.stringify(saved)); } catch { notify('ブラウザの保存容量を確認してください'); } el('savedCount').textContent = String(saved.length); }
   function notify(message) { el('toast').textContent = message; el('toast').classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => el('toast').classList.remove('show'), 2700); }
@@ -189,7 +192,7 @@
   function renderV3Suggestions(){
     if(!selected)return;
     const grid=el('v3HookGrid');grid.replaceChildren();
-    const options=hookOptions(selected);
+    const options=effectiveHooks(selected);
     for(const [kind,label] of HOOK_KINDS){
       const b=node('button','v3-choice');b.type='button';b.dataset.hook=kind;b.setAttribute('aria-pressed',String(kind===hookKind));
       addText(b,'span','',label);addText(b,'small','',options[kind]);
@@ -216,12 +219,92 @@
   function updateDraft(){
     if(!selected)return;
     const hook=manualHook||hookOptions(selected)[hookKind];
-    el('draftText').value=draftText(selected,platform,hook);
+    el('draftText').value=aiActive&&aiResult ? composeAiDraft(selected,platform,hook) : draftText(selected,platform,hook);
     updateDraftCounter();
+  }
+  // v4: OpenAIはCloudflare Worker経由でのみ呼び出す。プロンプトとAPIキーをGitHubに置かない。
+  function effectiveHooks(item){
+    if(aiActive && aiResult && Array.isArray(aiResult.hooks) && aiResult.hooks.length===5){
+      return Object.fromEntries(HOOK_KINDS.map(([kind],i)=>[kind,String(aiResult.hooks[i]||'').slice(0,110)]));
+    }
+    return hookOptions(item);
+  }
+  function composeAiDraft(item,where,hook){
+    const b=productBrief(item), body=String(aiResult?.bodies?.[where]||'').trim();
+    const lead=String(hook||'').trim().slice(0,110);
+    const price=money(item); const title=b.label;
+    // モデルが返した任意のURLは採用せず、楽天APIから得た正規の商品URLのみ後付けする。
+    const stripped=body.replace(/https?:\/\/\S+/gi,'').replace(/【PR】|\bPR\b/gi,'').trim();
+    const note=caution(item); const url=linkFor(item);
+    if(where==='x'){
+      const text=`${lead}\n【PR】${stripped}`;
+      const urlLine=url?'\n'+url:'';
+      const trimTo=(str,max)=>{let s=str;while(s.length>0 && xWeightedLength(s+urlLine)>max)s=s.slice(0,-1);return s.trimEnd()};
+      return trimTo(text,275)+urlLine;
+    }
+    const tagged=where==='room'?'#楽天ROOM '+(b.isCar?'#カー用品':'#スマホ周辺機器'):(b.isCar?'#カー用品':'#スマホ周辺機器');
+    return `${lead}\n\n【PR】${stripped}\n\n楽天表示価格：${price}\n${note}${url?'\n'+url:''}\n\n${tagged}`;
+  }
+  function resetV4(){
+    aiResult=null;aiActive=false;aiBusy=false;
+    const msg=el('v4Message');if(msg)msg.textContent='商品情報からAIが5つのフックと3媒体の文章を生成します。ボタンを押したときだけAPI料金が発生します。';
+    const detail=el('v4Analysis');if(detail)detail.textContent='';
+    const btn=el('v4Generate');if(btn){btn.disabled=false;btn.textContent='🤖 AIで投稿文を生成（課金あり）';}
+    const reset=el('v4Reset');if(reset)reset.disabled=true;
+  }
+  function installV4UI(){
+    if(el('v4Assist'))return;
+    const css=document.createElement('style');css.textContent=`
+      #v4Assist{margin:14px 0;padding:14px;border:1px solid #497997;border-radius:14px;background:linear-gradient(130deg,#163447,#112638)}
+      #v4Assist .v4-row{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:10px 0}
+      #v4Assist .v4-pw{flex:1;min-width:165px;padding:10px;background:#081b2a;border-radius:8px;border:1px solid #496a7f;color:#fff}
+      #v4Assist button{padding:10px;border:1px solid #597990;border-radius:8px;background:#193b4c;color:#effcff;cursor:pointer}
+      #v4Assist .v4-action{background:#36cce3;border-color:#42eaff;color:#052238;font-weight:800}
+      #v4Assist button[disabled]{opacity:.55;cursor:not-allowed}
+      #v4Assist .v4-msg{font-size:12px;line-height:1.7;color:#c8e3ee;margin:8px 0}
+      #v4Analysis{font-size:12px;white-space:pre-wrap;line-height:1.65;color:#c8e3ee}
+    `;document.head.appendChild(css);
+    const box=node('section');box.id='v4Assist';box.setAttribute('aria-label','AI投稿文生成');
+    addText(box,'div','v3-h2','🤖 v4｜OpenAIで文章を分析・生成');
+    addText(box,'p','v4-msg','AI生成にはAPI料金がかかります。未確認の性能・割引額を事実として投稿しないでください。');
+    const row=node('div','v4-row');box.appendChild(row);
+    const pw=node('input','v4-pw');pw.id='v4Password';pw.type='password';pw.placeholder='AI利用パスワード（Cloudflareに設定したもの）';pw.autocomplete='off';pw.setAttribute('aria-label','AI利用パスワード');row.appendChild(pw);
+    const go=node('button','v4-action','🤖 AIで投稿文を生成（課金あり）');go.id='v4Generate';go.type='button';row.appendChild(go);
+    const reset=node('button','','テンプレートに戻す');reset.id='v4Reset';reset.type='button';reset.disabled=true;row.appendChild(reset);
+    const msg=addText(box,'p','v4-msg','商品情報から5つのフックと3媒体の文章を生成します。1回のクリックでAIを1回呼び出します。');msg.id='v4Message';msg.setAttribute('role','status');
+    const analysis=addText(box,'div','','');analysis.id='v4Analysis';box.appendChild(analysis);
+    const reference=el('v3Hooks');reference.parentNode.insertBefore(box,reference);
+    el('draftTitle').textContent='投稿文作成 v4｜AI＋5つのフック';
+    go.addEventListener('click',generateV4);
+    reset.addEventListener('click',()=>{
+      resetV4();manualHook=hookOptions(selected)[hookKind];el('v3CustomHook').value=manualHook;renderV3Suggestions();updateDraft();
+    });
+  }
+  async function generateV4(){
+    if(!selected||aiBusy)return;
+    const pw=el('v4Password').value.trim();
+    if(pw.length<12){el('v4Message').textContent='AI利用パスワードを入力してください。CloudflareのOPENAI_API_KEYとは別のパスワードです。';return;}
+    el('v4Password').value='';
+    const base=(config.API_BASE||'').replace(/\/$/,'');
+    if(!base.startsWith('https://')){el('v4Message').textContent='Worker接続先が不正です';return;}
+    aiBusy=true;const go=el('v4Generate');go.disabled=true;go.textContent='AI生成中…（数十秒かかる場合あり）';el('v4Message').textContent='OpenAIへ商品情報を送信中。少し待ってね。';
+    const controller=new AbortController(); const timeout=setTimeout(()=>controller.abort(),35000);
+    try{
+      const body={name:String(selected.name||'').slice(0,260),price:Number(selected.price)||0,shopName:String(selected.shopName||'').slice(0,100),category:productBrief(selected).isCar?'car':'phone',hasCoupon:productBrief(selected).hasCoupon};
+      const resp=await fetch(base+'/api/ai-post',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+pw},body:JSON.stringify(body),signal:controller.signal,cache:'no-store'});
+      const obj=await resp.json().catch(()=>({}));
+      if(!resp.ok)throw new Error(obj.error||`API接続エラー（HTTP ${resp.status}）`);
+      if(!Array.isArray(obj.hooks)||obj.hooks.length!==5||!obj.bodies||!obj.bodies.room||!obj.bodies.x||!obj.bodies.threads)throw new Error('AIの返答形式が正しくありません');
+      aiResult=obj;aiActive=true;hookKind='risk';manualHook=String(obj.hooks[0]).slice(0,110);el('v3CustomHook').value=manualHook;
+      renderV3Suggestions();updateDraft();el('v4Reset').disabled=false;
+      el('v4Analysis').textContent='確認ポイント：'+String(obj.analysis||'').slice(0,500);
+      el('v4Message').textContent='✅ AI生成完了。5つのフックを選べるよ。内容を確認してから投稿してね。';
+    }catch(e){el('v4Message').textContent='⚠️ '+(e.name==='AbortError'?'AIの応答が時間内に返りませんでした。再実行すると追加料金が発生する可能性があります。':(e.message||'AI生成に失敗しました'));}
+    finally{clearTimeout(timeout);aiBusy=false;go.disabled=false;go.textContent='🤖 AIを再生成（課金あり）';}
   }
   function openDraft(item){
     selected=item;platform='room';hookKind='risk';
-    installV3UI();manualHook=hookOptions(item)[hookKind];el('v3CustomHook').value=manualHook;
+    installV3UI();installV4UI();resetV4();manualHook=hookOptions(item)[hookKind];el('v3CustomHook').value=manualHook;
     el('draftProduct').textContent=item.name;
     el('draftDialog').querySelectorAll('[data-platform]').forEach(b=>b.classList.toggle('active',b.dataset.platform==='room'));
     renderV3Suggestions();updateDraft();el('draftDialog').showModal();
