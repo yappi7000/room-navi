@@ -10,6 +10,9 @@
   let toastTimer;
   // v4: AI資格情報はセッション内の変数のみ。localStorage等へ保存しない。
   let aiResult = null, aiActive = false, aiBusy = false;
+  let xLinkPlacement='inline'; // inline or reply; never posts automatically
+  let saleEvent='', saleChecked=false; // user confirms campaign facts manually
+  let saleExpiry='';
 
   function readSaved() { try { const data = JSON.parse(localStorage.getItem(KEY)); return Array.isArray(data) ? data.filter(x => x && typeof x.itemCode === 'string').slice(0,300) : []; } catch { return []; } }
   function persist() { try { localStorage.setItem(KEY, JSON.stringify(saved)); } catch { notify('ブラウザの保存容量を確認してください'); } el('savedCount').textContent = String(saved.length); }
@@ -216,10 +219,53 @@
     addText(meta,'span',warn?'warn':'',warn?'⚠️ 長すぎる可能性があります。X投稿画面で確認してください。':label);
     addText(meta,'span','','【PR】表示・リンク・価格を投稿前に確認');
   }
+  // v4.1: 価格/イベント情報はAIの推測ではなく、利用者が確認した場合のみ記載。
+  function checkedSaleText(){
+    if(!saleChecked||!saleEvent)return '';
+    const expiry=saleExpiry.trim().slice(0,45);
+    // 記載した日付・時刻も本人が確認済みである必要がある。
+    return `楽天${saleEvent}対象（適用条件を確認済み）${expiry?'｜確認済み期限：'+expiry:''}`;
+  }
+  function preparePost(text,item,where){
+    // フックの1行目にPRを付ける。AIが出した重複の【PR】は除去。
+    let clean=String(text||'').replace(/【PR】/g,'').trim();
+    clean='【PR】'+clean;
+    const url=linkFor(item);
+    const offer=checkedSaleText();
+    if(where==='x'){
+      const urlPattern=/https?:\/\/[^\s]+/g;
+      clean=clean.replace(urlPattern,'').trim();
+      if(offer)clean+='\n'+offer;
+      if(xLinkPlacement==='reply'){
+        clean+='\n商品リンクは返信欄へ👇';
+        // Xの本体にはURLを入れないが、PR表記は本体に残す。
+        return clean;
+      }
+      return clean+(url?'\n'+url:'');
+    }
+    // ROOM・Threadsは本文に正規の楽天URLを残す。
+    if(offer){
+      if(url && clean.includes(url))clean=clean.replace(url,offer+'\n'+url);
+      else clean+='\n'+offer;
+    }
+    return clean;
+  }
+  function updateXReply(){
+    const box=el('v41ReplyBox'),label=el('v41ReplyText'),btn=el('v41CopyReply');
+    if(!box)return;
+    const active=platform==='x'&&xLinkPlacement==='reply';
+    box.hidden=!active;
+    if(label)label.value=selected&&linkFor(selected)?`【PR】商品詳細はこちら👇\n${linkFor(selected)}`:'商品リンクを確認してください';
+    if(btn)btn.disabled=!active||!selected||!linkFor(selected);
+    const hint=el('v41XOptions');if(hint)hint.hidden=platform!=='x';
+    const warning=el('v41SaleWarning');if(warning)warning.textContent=saleEvent&&!saleChecked?'⚠️ セールの対象・条件が未確認のため、投稿文にはイベント名を追加しません。':'';
+  }
   function updateDraft(){
     if(!selected)return;
     const hook=manualHook||hookOptions(selected)[hookKind];
-    el('draftText').value=aiActive&&aiResult ? composeAiDraft(selected,platform,hook) : draftText(selected,platform,hook);
+    const raw=aiActive&&aiResult ? composeAiDraft(selected,platform,hook) : draftText(selected,platform,hook);
+    el('draftText').value=preparePost(raw,selected,platform);
+    updateXReply();
     updateDraftCounter();
   }
   // v4: OpenAIはCloudflare Worker経由でのみ呼び出す。プロンプトとAPIキーをGitHubに置かない。
@@ -263,6 +309,16 @@
       #v4Assist button[disabled]{opacity:.55;cursor:not-allowed}
       #v4Assist .v4-msg{font-size:12px;line-height:1.7;color:#c8e3ee;margin:8px 0}
       #v4Analysis{font-size:12px;white-space:pre-wrap;line-height:1.65;color:#c8e3ee}
+      #v41Controls{border-top:1px solid #496a7f;margin-top:13px;padding-top:12px}
+      #v41Controls label{display:block;font-size:12px;color:#d8ecf5;margin-bottom:5px}
+      #v41Controls select,#v41Controls input[type=text],#v41ReplyText{padding:9px;background:#081b2a;border:1px solid #496a7f;border-radius:8px;color:#fff;width:100%}
+      #v41Controls .v41-check{display:flex;align-items:flex-start;gap:8px}
+      #v41Controls .v41-check input{margin-top:3px}
+      #v41Controls .v41-check label{flex:1;line-height:1.5}
+      #v41Controls .v41-small{font-size:11px;color:#b3ccda;line-height:1.6;margin:5px 0 10px}
+      #v41ReplyBox{padding:10px;border:1px solid #497997;border-radius:10px;margin-top:10px}
+      #v41ReplyBox textarea{min-height:88px;resize:vertical}
+      #v41Controls [hidden],#v41ReplyBox[hidden]{display:none!important}
     `;document.head.appendChild(css);
     const box=node('section');box.id='v4Assist';box.setAttribute('aria-label','AI投稿文生成');
     addText(box,'div','v3-h2','🤖 v4｜OpenAIで文章を分析・生成');
@@ -273,6 +329,38 @@
     const reset=node('button','','テンプレートに戻す');reset.id='v4Reset';reset.type='button';reset.disabled=true;row.appendChild(reset);
     const msg=addText(box,'p','v4-msg','商品情報から5つのフックと3媒体の文章を生成します。1回のクリックでAIを1回呼び出します。');msg.id='v4Message';msg.setAttribute('role','status');
     const analysis=addText(box,'div','','');analysis.id='v4Analysis';box.appendChild(analysis);
+    // v4.1: 投稿形式と販促情報はAPI再生成なしで切り替え可能。
+    const controls=node('div');controls.id='v41Controls';box.appendChild(controls);
+    addText(controls,'div','v3-h2','📣 v4.1｜投稿方式・セール確認');
+    const xRow=node('div');xRow.id='v41XOptions';controls.appendChild(xRow);
+    const xLabel=addText(xRow,'label','','𝕏のリンク配置');xLabel.htmlFor='v41XPlacement';
+    const xSelect=node('select');xSelect.id='v41XPlacement';
+    for(const [value,label] of [['inline','本文に商品リンクを入れる'],['reply','本文と返信を分ける（ツリー投稿）']]){
+      const opt=node('option','',label);opt.value=value;xSelect.appendChild(opt);
+    }
+    xRow.appendChild(xSelect);
+    addText(xRow,'p','v41-small','返信方式では元投稿にも【PR】を表示。自動投稿はしません。');
+    xSelect.addEventListener('change',()=>{xLinkPlacement=xSelect.value;updateDraft();});
+    const saleLabel=addText(controls,'label','','楽天イベント（確認済みの場合のみ）');saleLabel.htmlFor='v41Sale';
+    const saleSelect=node('select');saleSelect.id='v41Sale';controls.appendChild(saleSelect);
+    for(const [value,label] of [['','イベントを記載しない'],['お買い物マラソン','お買い物マラソン'],['スーパーSALE','スーパーSALE'],['5と0のつく日','5と0のつく日']]){
+      const opt=node('option','',label);opt.value=value;saleSelect.appendChild(opt);
+    }
+    const saleCheck=node('div','v41-check');controls.appendChild(saleCheck);
+    const saleCheckbox=node('input');saleCheckbox.type='checkbox';saleCheckbox.id='v41SaleChecked';saleCheck.appendChild(saleCheckbox);
+    const checkLabel=addText(saleCheck,'label','','公式ページで開催日・対象商品・適用条件を確認しました');checkLabel.htmlFor='v41SaleChecked';
+    const expiryLabel=addText(controls,'label','','確認済み終了日時（任意・未確認なら空欄）');expiryLabel.htmlFor='v41Expiry';
+    const expiryInput=node('input');expiryInput.id='v41Expiry';expiryInput.type='text';expiryInput.maxLength=45;expiryInput.placeholder='例：10/20 23:59 ※自分で確認して入力';controls.appendChild(expiryInput);
+    const saleWarning=addText(controls,'p','v41-small','');saleWarning.id='v41SaleWarning';
+    addText(controls,'p','v41-small','未確認の割引率・値引き額・時短効果はAIに推測させず、投稿文にも自動挿入しません。');
+    saleSelect.addEventListener('change',()=>{saleEvent=saleSelect.value;updateDraft();});
+    saleCheckbox.addEventListener('change',()=>{saleChecked=saleCheckbox.checked;updateDraft();});
+    expiryInput.addEventListener('input',()=>{saleExpiry=expiryInput.value;updateDraft();});
+    const replyBox=node('div');replyBox.id='v41ReplyBox';replyBox.hidden=true;controls.appendChild(replyBox);
+    addText(replyBox,'p','v41-small','1通目の返信用（商品リンク）。投稿本文と分けてコピーできます。');
+    const replyText=node('textarea');replyText.id='v41ReplyText';replyText.readOnly=true;replyBox.appendChild(replyText);
+    const copyReply=node('button','','返信文をコピー');copyReply.id='v41CopyReply';copyReply.type='button';replyBox.appendChild(copyReply);
+    copyReply.addEventListener('click',async()=>{try{await navigator.clipboard.writeText(replyText.value);notify('返信用の商品リンクをコピーしました');}catch{replyText.focus();replyText.select();notify('文章を選択しました。⌘Cでコピーしてください');}});
     const reference=el('v3Hooks');reference.parentNode.insertBefore(box,reference);
     el('draftTitle').textContent='投稿文作成 v4｜AI＋5つのフック';
     go.addEventListener('click',generateV4);
@@ -304,7 +392,10 @@
   }
   function openDraft(item){
     selected=item;platform='room';hookKind='risk';
-    installV3UI();installV4UI();resetV4();manualHook=hookOptions(item)[hookKind];el('v3CustomHook').value=manualHook;
+    xLinkPlacement='inline';saleEvent='';saleChecked=false;saleExpiry='';
+    installV3UI();installV4UI();resetV4();
+    el('v41XPlacement').value='inline';el('v41Sale').value='';el('v41SaleChecked').checked=false;el('v41Expiry').value='';
+    manualHook=hookOptions(item)[hookKind];el('v3CustomHook').value=manualHook;
     el('draftProduct').textContent=item.name;
     el('draftDialog').querySelectorAll('[data-platform]').forEach(b=>b.classList.toggle('active',b.dataset.platform==='room'));
     renderV3Suggestions();updateDraft();el('draftDialog').showModal();
