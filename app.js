@@ -65,17 +65,43 @@
   }
   function renderSaved(){ const holder=el('savedResults'); holder.replaceChildren(); el('savedEmpty').hidden=saved.length>0; saved.forEach(item=>holder.appendChild(createCard(item,true))); }
   function linkFor(item){return safeUrl(item.url) || ''}
+
+  // v2: 楽天の商品名をそのまま広告文へ流し込まない。商品名中の安全性/値引き表示も未検証として扱う。
+  function productBrief(item) {
+    const raw=String(item.name||'').normalize('NFKC');
+    const isCar=/車載|車内|車用|カー用品|シガーソケット|ドライブレコーダー|洗車|車中泊|車用充電/i.test(raw);
+    let category='便利グッズ';
+    if (/モバイルバッテリー|モバ充|充電宝/.test(raw)) category='モバイルバッテリー';
+    else if (/スマホホルダー|スマートフォンホルダー|車載ホルダー/.test(raw)) category=isCar?'車載スマホホルダー':'スマホホルダー';
+    else if (/充電器|チャージャー/.test(raw)) category=isCar?'車載充電器':'充電器';
+    else if (/USB.C|Type.C|ライトニング|ケーブル/.test(raw)) category='充電ケーブル';
+    else if (/ケース|カバー/.test(raw)) category='スマホケース';
+    else if (/洗車|クリーナー|掃除/.test(raw)) category=isCar?'車内・洗車用品':'お掃除グッズ';
+    if(isCar && category==='モバイルバッテリー') category='車内向けモバイルバッテリー';
+    const cap=raw.match(/\b(?:5000|6000|8000|10000|12000|15000|20000|25000|30000)\s*mAh\b/i);
+    const relevantCaps=/バッテリー/.test(category) && cap ? ' '+cap[0].replace(/\s+/g,'') : '';
+    const magnetic=/マグネット|MagSafe/i.test(raw) && /バッテリー|充電器|ホルダー/.test(category) ? '（マグネット式表記）' : '';
+    const label=(category+relevantCaps+magnetic).slice(0,42);
+    const hasCoupon=/クーポン|coupon|割引|半額|OFF|セール|ポイント\d+倍/i.test(raw);
+    const warning=hasCoupon?'商品名にクーポン・値引きの表記あり。適用条件と実際の支払額を確認。':'価格・対応機種・送料は購入前に確認。';
+    return {category,label,isCar,hasCoupon,warning};
+  }
   function draftText(item,where) {
     const link=linkFor(item);
-    const p=Number.isFinite(Number(item.price)) ? `¥${fmt(item.price)}` : '価格は商品ページで確認';
-    const title = (item.name||'').trim();
-    const shop = (item.shopName||'').trim();
+    const price=Number(item.price)>0 ? `¥${fmt(item.price)}` : '商品ページで確認';
+    const shop=String(item.shopName||'').trim();
+    const brief=productBrief(item);
+    const topic=brief.isCar?'🚗 車内で使うアイテム':'📱 スマホ周辺機器';
+    const focus=brief.isCar?'車種・取付方法・電源との相性':'対応機種・充電方式・サイズ';
+    const note=brief.hasCoupon?'※クーポン条件・実際の支払額は商品ページで確認。':'※購入前に価格・仕様・送料を確認。';
+    const urlLine=link?'\n'+link:'\n（商品リンクを確認してください）';
     if (where==='x') {
-      const prefix=`PR｜気になるアイテム📱🚗\n${title.slice(0,38)}\n参考価格：${p}\n購入前に仕様・価格を確認👇\n`;
-      return prefix+link; // 商品名・価格・URLの長さによっては140字を超えるため投稿前に編集してください。
+      return `【PR】${topic}\n${brief.label}\n参考表示価格：${price}\n${focus}を確認👇${urlLine}`;
     }
-    if (where==='threads') return `【PR／気になる便利グッズ】\n\n${title}\n\n参考価格：${p}\nショップ：${shop}\n\n商品情報を比較して、使い方や対応機種が自分に合うかチェックしてみてね😊\n\n${link}\n\n#スマホ周辺機器 #カー用品 #楽天市場`;
-    return `【PR】📱🚗 便利アイテムをチェック！\n\n${title}\n\n🛍️ ショップ：${shop}\n💰 参考価格：${p}\n\n充電環境やカーライフを見直したい人向けに商品情報をピックアップしました。対応機種・仕様・送料・価格を商品ページで確認してください😊\n\n${link}\n\n#スマホ周辺機器 #便利グッズ #楽天ROOM`;
+    if (where==='threads') {
+      return `【PR】${topic}\n\n楽天で見つけた「${brief.label}」。\n\n表示価格：${price}${shop?'\nショップ：'+shop:''}\n\n選ぶときに気になるのは${focus}。\n安さだけで決めず、条件までチェックしたいね😊\n\n${note}${urlLine}\n\n${brief.isCar?'#カー用品 #車内グッズ':'#スマホ周辺機器 #便利グッズ'}`;
+    }
+    return `【PR】${topic}を賢く選ぼう✨\n\n🛍️ ${brief.label}\n🏪 ショップ：${shop||'商品ページで確認'}\n💰 表示価格：${price}\n\n${focus}を確認してから選びたいアイテム。\n${note}${urlLine}\n\n${brief.isCar?'#カー用品 #車内便利グッズ':'#スマホ周辺機器 #楽天ROOM'}`;
   }
   function openDraft(item){selected=item;platform='room';el('draftProduct').textContent=item.name;el('draftDialog').querySelectorAll('[data-platform]').forEach(b=>b.classList.toggle('active',b.dataset.platform==='room'));el('draftText').value=draftText(item,platform);el('draftDialog').showModal();}
   function setTab(which) { ['search','saved'].forEach(k=>{el('panel-'+k).classList.toggle('hidden',k!==which);el('tab-'+k).setAttribute('aria-selected',String(k===which));}); if (which==='saved') renderSaved(); }
